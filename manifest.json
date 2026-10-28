@@ -1,0 +1,9 @@
+{
+  "id": "hover-image",
+  "name": "Hover Image",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Bind a vault image to selected text or a link and preview it on hover.",
+  "author": "keyoneway",
+  "isDesktopOnly": false
+}
