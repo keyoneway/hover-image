@@ -1,19 +1,8 @@
 import { App, Editor, Menu, Modal, Notice, Plugin, TFile } from 'obsidian';
-import { bindImage, changeImage, removeImage } from './markup';
-import { adjacentImage, NoteImage, scanNoteImages } from './note-images';
+import { bindImage, changeImage, findBinding, imagePathFromMarkup, removeImage, restoreImageBelow } from './markup';
+import { adjacentImage, NoteImage, scanNoteImages, standaloneImageToRemove } from './note-images';
 import { popupPosition } from './popup-position';
-
-const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
-const MARKUP = /<(a|span)\b[^>]*\bdata-hover-id="([^"]+)"[^>]*>[\s\S]*?<\/\1>/g;
-
-function findBinding(source: string, id: string): { start: number; end: number; markup: string } | null {
-  for (const match of source.matchAll(MARKUP)) {
-    if (match[2] === id && match.index !== undefined) {
-      return { start: match.index, end: match.index + match[0].length, markup: match[0] };
-    }
-  }
-  return null;
-}
+import { IMAGE_EXTENSIONS, matchingImages, nextGalleryPage, orderedImages } from './gallery';
 
 interface GalleryImage { file: TFile; embed?: NoteImage; recommended?: boolean }
 
@@ -24,10 +13,10 @@ class BindModal extends Modal {
   private vaultGalleryEl: HTMLDivElement | null = null;
   private vaultImages: GalleryImage[] | null = null;
   private renderedScopes = { note: false, vault: false };
+  private galleryMatches: Record<'note' | 'vault', GalleryImage[]> = { note: [], vault: [] };
+  private visibleCounts = { note: 0, vault: 0 };
   private searchEl: HTMLInputElement | null = null;
   private selectedEl: HTMLElement | null = null;
-  private removeRow: HTMLLabelElement | null = null;
-  private removeInput: HTMLInputElement | null = null;
   private galleryScope: 'note' | 'vault' = 'note';
   private selected: GalleryImage | null = null;
   private readonly noteImages: GalleryImage[];
@@ -59,7 +48,6 @@ class BindModal extends Modal {
     this.modalEl.addClass('hover-image-modal');
     this.titleEl.setText(this.initialPath ? '更换悬浮图片' : '设置悬浮图片');
     this.contentEl.empty();
-    if (this.recommended) this.contentEl.createEl('p', { cls: 'hover-image-recommendation', text: '已优先选中网址下方的图片，确认即可绑定。' });
     const tabs = this.contentEl.createDiv({ cls: 'hover-image-tabs' });
     const noteTab = tabs.createEl('button', { text: `当前笔记 (${this.noteImages.length})` });
     const vaultTab = tabs.createEl('button', { text: '仓库全部图片' });
@@ -79,19 +67,17 @@ class BindModal extends Modal {
     vaultTab.addEventListener('click', () => switchScope('vault'));
     noteTab.toggleClass('is-active', this.galleryScope === 'note');
     vaultTab.toggleClass('is-active', this.galleryScope === 'vault');
-    this.searchEl = this.contentEl.createEl('input', { cls: 'hover-image-search', type: 'search', placeholder: '按文件名或文件夹搜索图片…' });
+    this.searchEl = this.contentEl.createEl('input', { cls: 'hover-image-search', type: 'search', placeholder: '按文件名或文件夹搜索，也可下滑浏览全部图片' });
     this.searchEl.addEventListener('input', () => this.renderGallery());
     this.searchEl.style.display = this.galleryScope === 'vault' ? '' : 'none';
     this.noteGalleryEl = this.contentEl.createDiv({ cls: 'hover-image-gallery' });
     this.vaultGalleryEl = this.contentEl.createDiv({ cls: 'hover-image-gallery' });
+    this.noteGalleryEl.addEventListener('scroll', () => this.loadIfNearEnd('note'));
+    this.vaultGalleryEl.addEventListener('scroll', () => this.loadIfNearEnd('vault'));
     this.noteGalleryEl.style.display = this.galleryScope === 'note' ? '' : 'none';
     this.vaultGalleryEl.style.display = this.galleryScope === 'vault' ? '' : 'none';
     this.galleryEl = this.galleryScope === 'note' ? this.noteGalleryEl : this.vaultGalleryEl;
     this.renderGallery();
-    this.removeRow = this.contentEl.createEl('label', { cls: 'hover-image-remove-row' });
-    this.removeInput = this.removeRow.createEl('input', { type: 'checkbox' });
-    this.removeRow.appendText(' 绑定后移除笔记中直接显示图片的那一行（不删除图片文件）');
-    this.removeInput.checked = Boolean(this.recommended && !this.initialPath);
     const footer = this.contentEl.createDiv({ cls: 'hover-image-footer' });
     this.selectedEl = footer.createDiv({ cls: 'hover-image-selected' });
     const actions = footer.createDiv({ cls: 'hover-image-actions' });
@@ -103,22 +89,34 @@ class BindModal extends Modal {
 
   private renderGallery(): void {
     if (!this.galleryEl) return;
+    const scope = this.galleryScope;
     this.galleryEl.empty();
-    const all: GalleryImage[] = this.galleryScope === 'note'
+    this.galleryEl.scrollTop = 0;
+    const all: GalleryImage[] = scope === 'note'
       ? this.noteImages
-      : (this.vaultImages ??= this.app.vault.getFiles().filter(file => IMAGE_EXTENSIONS.test(file.name)).sort((a, b) => b.stat.mtime - a.stat.mtime).map(file => ({ file })));
-    this.renderedScopes[this.galleryScope] = true;
-    const query = this.galleryScope === 'vault' ? this.searchEl?.value.trim().toLowerCase() ?? '' : '';
-    const matches = all.filter(image => image.file.path.toLowerCase().includes(query));
+      : (this.vaultImages ??= orderedImages(this.app.vault.getFiles()).map(file => ({ file })));
+    this.renderedScopes[scope] = true;
+    const query = scope === 'vault' ? this.searchEl?.value ?? '' : '';
+    const matches = matchingImages(all, query);
+    this.galleryMatches[scope] = matches;
+    this.visibleCounts[scope] = 0;
     this.galleryEl.toggleClass('is-empty', matches.length === 0);
     if (!matches.length) {
       const empty = this.galleryEl.createDiv({ cls: 'hover-image-empty' });
-      if (this.galleryScope === 'note') empty.createSpan({ cls: 'hover-image-empty-icon', text: '!' });
-      empty.createSpan({ text: this.galleryScope === 'note' ? '当前笔记没有匹配的图片，可切换到「仓库全部图片」。' : '没有匹配的图片。' });
+      if (scope === 'note') empty.createSpan({ cls: 'hover-image-empty-icon', text: '!' });
+      empty.createSpan({ text: scope === 'note' ? '当前笔记没有匹配的图片，可切换到「仓库全部图片」。' : '没有匹配的图片。' });
       return;
     }
-    for (const image of matches.slice(0, 80)) {
-      const tile = this.galleryEl.createEl('button', { cls: 'hover-image-tile', attr: { type: 'button', title: image.file.path, 'aria-label': `选择 ${image.file.path}` } });
+    this.appendNextPage(scope);
+  }
+
+  private appendNextPage(scope: 'note' | 'vault'): void {
+    const gallery = scope === 'note' ? this.noteGalleryEl : this.vaultGalleryEl;
+    if (!gallery) return;
+    const offset = this.visibleCounts[scope];
+    const page = nextGalleryPage(this.galleryMatches[scope], offset);
+    for (const image of page) {
+      const tile = gallery.createEl('button', { cls: 'hover-image-tile', attr: { type: 'button', title: image.file.path, 'aria-label': `选择 ${image.file.path}` } });
       tile.dataset.imagePath = image.file.path;
       tile.dataset.imageLine = String(image.embed?.line ?? -1);
       tile.toggleClass('is-selected', this.selected?.file.path === image.file.path && this.selected?.embed?.line === image.embed?.line);
@@ -128,12 +126,17 @@ class BindModal extends Modal {
       tile.addEventListener('click', () => {
         this.selected = image;
         this.path = image.file.path;
-        if (this.removeInput) this.removeInput.checked = Boolean(image.recommended && !this.initialPath);
         this.updateSelection();
         this.syncSelectedTiles();
       });
     }
-    if (matches.length > 80) this.galleryEl.createEl('p', { cls: 'hover-image-gallery-limit', text: `显示前 80 / ${matches.length} 张，请输入关键词缩小范围。` });
+    this.visibleCounts[scope] += page.length;
+  }
+
+  private loadIfNearEnd(scope: 'note' | 'vault'): void {
+    const gallery = scope === 'note' ? this.noteGalleryEl : this.vaultGalleryEl;
+    if (!gallery || this.visibleCounts[scope] >= this.galleryMatches[scope].length) return;
+    if (gallery.scrollTop + gallery.clientHeight >= gallery.scrollHeight - 200) this.appendNextPage(scope);
   }
 
   private syncSelectedTiles(): void {
@@ -147,7 +150,6 @@ class BindModal extends Modal {
       this.selectedEl.setText(this.path ? `已选择：${this.path}` : '');
       this.selectedEl.style.display = this.path ? '' : 'none';
     }
-    if (this.removeRow) this.removeRow.style.display = this.selected?.embed?.standalone ? 'flex' : 'none';
   }
 
   private async confirm(button: HTMLButtonElement): Promise<void> {
@@ -155,13 +157,43 @@ class BindModal extends Modal {
     try {
       const file = this.app.vault.getAbstractFileByPath(this.path);
       if (!(file instanceof TFile) || !IMAGE_EXTENSIONS.test(file.name)) throw new Error('请选择仓库中已有的图片。');
-      await this.onConfirm(file.path, this.removeInput?.checked && this.selected?.embed?.standalone ? this.selected.embed : null);
+      await this.onConfirm(file.path, standaloneImageToRemove(this.selected?.embed));
       this.close();
       new Notice('悬浮图片已设置');
     } catch (error) {
       new Notice(error instanceof Error ? error.message : '设置失败');
       button.disabled = false;
     }
+  }
+
+  onClose(): void { this.contentEl.empty(); }
+}
+
+class UnbindModal extends Modal {
+  constructor(app: App, private readonly onChoose: (showImage: boolean) => Promise<void>) { super(app); }
+
+  onOpen(): void {
+    this.titleEl.setText('解除悬浮关联');
+    this.contentEl.createEl('p', { text: '选择解除后的显示方式。图片附件文件不会被删除。' });
+    const actions = this.contentEl.createDiv({ cls: 'hover-image-unbind-actions' });
+    const only = actions.createEl('button', { text: '仅解除关联' });
+    const show = actions.createEl('button', { text: '在正文显示图片', cls: 'mod-cta' });
+    actions.createEl('button', { text: '取消' }).addEventListener('click', () => this.close());
+    const choose = async (showImage: boolean): Promise<void> => {
+      only.disabled = true;
+      show.disabled = true;
+      try {
+        await this.onChoose(showImage);
+        this.close();
+        new Notice(showImage ? '已在正文显示图片并解除悬浮关联' : '已解除悬浮关联，图片文件保留');
+      } catch (error) {
+        new Notice(error instanceof Error ? error.message : '解除关联失败');
+        only.disabled = false;
+        show.disabled = false;
+      }
+    };
+    only.addEventListener('click', () => { void choose(false); });
+    show.addEventListener('click', () => { void choose(true); });
   }
 
   onClose(): void { this.contentEl.empty(); }
@@ -269,8 +301,10 @@ export default class HoverImagePlugin extends Plugin {
         new BindModal(this.app, target.dataset.hoverImage ?? '', file, source, null, async path => this.updateBinding(file, id, markup => changeImage(markup, path))).open();
       }).catch(error => new Notice(error instanceof Error ? error.message : '无法读取当前笔记'));
     }));
-    menu.addItem(item => item.setTitle('移除悬浮图片关联').setIcon('unlink').onClick(() => {
-      void this.updateBinding(file, id, removeImage).then(() => new Notice('已移除关联，图片文件保留')).catch(error => new Notice(error instanceof Error ? error.message : '移除失败'));
+    menu.addItem(item => item.setTitle('解除悬浮关联…').setIcon('unlink').onClick(() => {
+      new UnbindModal(this.app, showImage => showImage
+        ? this.showImageInNote(file, id)
+        : this.updateBinding(file, id, removeImage)).open();
     }));
     menu.showAtMouseEvent(event);
   }
@@ -284,5 +318,22 @@ export default class HoverImagePlugin extends Plugin {
       return source.slice(0, binding.start) + change(binding.markup) + source.slice(binding.end);
     });
     if (!found) throw new Error('未在当前笔记找到关联，请重新打开笔记。');
+  }
+
+  private async showImageInNote(file: TFile, id: string): Promise<void> {
+    await this.app.vault.process(file, source => {
+      const binding = findBinding(source, id);
+      if (!binding) throw new Error('未在当前笔记找到关联，请重新打开笔记。');
+      const path = imagePathFromMarkup(binding.markup);
+      const image = path ? this.app.vault.getAbstractFileByPath(path) : null;
+      if (!(image instanceof TFile) || !IMAGE_EXTENSIONS.test(image.name)) throw new Error('关联的图片文件不存在，无法显示到正文。');
+      const anchorLine = source.slice(0, binding.end).split('\n').length - 1;
+      const below = adjacentImage(source, anchorLine, scanNoteImages(source));
+      if (below && this.app.metadataCache.getFirstLinkpathDest(below.linkpath, file.path)?.path === image.path) {
+        return source.slice(0, binding.start) + removeImage(binding.markup) + source.slice(binding.end);
+      }
+      const embed = `!${this.app.fileManager.generateMarkdownLink(image, file.path)}`;
+      return restoreImageBelow(source, id, embed);
+    });
   }
 }

@@ -31,6 +31,15 @@ var import_obsidian = require("obsidian");
 var attr = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 var html = (value) => attr(value).replace(/'/g, "&#39;");
 var unattr = (value) => value.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+var MARKUP = /<(a|span)\b[^>]*\bdata-hover-id="([^"]+)"[^>]*>[\s\S]*?<\/\1>/g;
+function findBinding(source, id) {
+  for (const match of source.matchAll(MARKUP)) {
+    if (match[2] === id && match.index !== void 0) {
+      return { start: match.index, end: match.index + match[0].length, markup: match[0] };
+    }
+  }
+  return null;
+}
 function bindImage(source, imagePath, id) {
   if (!source.trim() || !imagePath.trim()) throw new Error("Text and image path are required");
   const original = attr(encodeURIComponent(source));
@@ -53,8 +62,23 @@ function removeImage(markup) {
   if (!match) throw new Error("Invalid image binding");
   return decodeURIComponent(unattr(match[1]));
 }
+function restoreImageBelow(source, id, embed) {
+  var _a;
+  const binding = findBinding(source, id);
+  if (!binding) throw new Error("\u672A\u5728\u5F53\u524D\u7B14\u8BB0\u627E\u5230\u5173\u8054\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u7B14\u8BB0\u3002");
+  const restored = source.slice(0, binding.start) + removeImage(binding.markup) + source.slice(binding.end);
+  const lineBreak = restored.indexOf("\n", binding.start);
+  const lineEnd = lineBreak < 0 ? restored.length : lineBreak > 0 && restored[lineBreak - 1] === "\r" ? lineBreak - 1 : lineBreak;
+  const newline = lineBreak > 0 && restored[lineBreak - 1] === "\r" ? "\r\n" : "\n";
+  const nextContent = (_a = restored.slice(lineBreak < 0 ? restored.length : lineBreak + 1).split(/\r?\n/).find((line) => line.trim())) == null ? void 0 : _a.trim();
+  if (nextContent === embed) return restored;
+  return restored.slice(0, lineEnd) + newline + embed + restored.slice(lineEnd);
+}
 
 // src/note-images.ts
+function standaloneImageToRemove(image) {
+  return (image == null ? void 0 : image.standalone) ? image : null;
+}
 function scanNoteImages(source) {
   var _a, _b;
   const images = [];
@@ -96,17 +120,20 @@ function popupPosition(link, popup, viewport) {
   return { left, top };
 }
 
-// src/main.ts
+// src/gallery.ts
 var IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
-var MARKUP = /<(a|span)\b[^>]*\bdata-hover-id="([^"]+)"[^>]*>[\s\S]*?<\/\1>/g;
-function findBinding(source, id) {
-  for (const match of source.matchAll(MARKUP)) {
-    if (match[2] === id && match.index !== void 0) {
-      return { start: match.index, end: match.index + match[0].length, markup: match[0] };
-    }
-  }
-  return null;
+function orderedImages(files) {
+  return files.filter((file) => IMAGE_EXTENSIONS.test(file.name)).sort((a, b) => b.stat.mtime - a.stat.mtime || a.path.localeCompare(b.path));
 }
+function matchingImages(images, query) {
+  const needle = query.trim().toLowerCase();
+  return needle ? images.filter((image) => image.file.path.toLowerCase().includes(needle)) : images;
+}
+function nextGalleryPage(images, offset, pageSize = 80) {
+  return images.slice(offset, offset + pageSize);
+}
+
+// src/main.ts
 var BindModal = class extends import_obsidian.Modal {
   constructor(app, initialPath, noteFile, noteSource, selectedLine, onConfirm) {
     var _a, _b, _c, _d, _e, _f;
@@ -119,10 +146,10 @@ var BindModal = class extends import_obsidian.Modal {
     __publicField(this, "vaultGalleryEl", null);
     __publicField(this, "vaultImages", null);
     __publicField(this, "renderedScopes", { note: false, vault: false });
+    __publicField(this, "galleryMatches", { note: [], vault: [] });
+    __publicField(this, "visibleCounts", { note: 0, vault: 0 });
     __publicField(this, "searchEl", null);
     __publicField(this, "selectedEl", null);
-    __publicField(this, "removeRow", null);
-    __publicField(this, "removeInput", null);
     __publicField(this, "galleryScope", "note");
     __publicField(this, "selected", null);
     __publicField(this, "noteImages");
@@ -143,7 +170,6 @@ var BindModal = class extends import_obsidian.Modal {
     this.modalEl.addClass("hover-image-modal");
     this.titleEl.setText(this.initialPath ? "\u66F4\u6362\u60AC\u6D6E\u56FE\u7247" : "\u8BBE\u7F6E\u60AC\u6D6E\u56FE\u7247");
     this.contentEl.empty();
-    if (this.recommended) this.contentEl.createEl("p", { cls: "hover-image-recommendation", text: "\u5DF2\u4F18\u5148\u9009\u4E2D\u7F51\u5740\u4E0B\u65B9\u7684\u56FE\u7247\uFF0C\u786E\u8BA4\u5373\u53EF\u7ED1\u5B9A\u3002" });
     const tabs = this.contentEl.createDiv({ cls: "hover-image-tabs" });
     const noteTab = tabs.createEl("button", { text: `\u5F53\u524D\u7B14\u8BB0 (${this.noteImages.length})` });
     const vaultTab = tabs.createEl("button", { text: "\u4ED3\u5E93\u5168\u90E8\u56FE\u7247" });
@@ -163,19 +189,17 @@ var BindModal = class extends import_obsidian.Modal {
     vaultTab.addEventListener("click", () => switchScope("vault"));
     noteTab.toggleClass("is-active", this.galleryScope === "note");
     vaultTab.toggleClass("is-active", this.galleryScope === "vault");
-    this.searchEl = this.contentEl.createEl("input", { cls: "hover-image-search", type: "search", placeholder: "\u6309\u6587\u4EF6\u540D\u6216\u6587\u4EF6\u5939\u641C\u7D22\u56FE\u7247\u2026" });
+    this.searchEl = this.contentEl.createEl("input", { cls: "hover-image-search", type: "search", placeholder: "\u6309\u6587\u4EF6\u540D\u6216\u6587\u4EF6\u5939\u641C\u7D22\uFF0C\u4E5F\u53EF\u4E0B\u6ED1\u6D4F\u89C8\u5168\u90E8\u56FE\u7247" });
     this.searchEl.addEventListener("input", () => this.renderGallery());
     this.searchEl.style.display = this.galleryScope === "vault" ? "" : "none";
     this.noteGalleryEl = this.contentEl.createDiv({ cls: "hover-image-gallery" });
     this.vaultGalleryEl = this.contentEl.createDiv({ cls: "hover-image-gallery" });
+    this.noteGalleryEl.addEventListener("scroll", () => this.loadIfNearEnd("note"));
+    this.vaultGalleryEl.addEventListener("scroll", () => this.loadIfNearEnd("vault"));
     this.noteGalleryEl.style.display = this.galleryScope === "note" ? "" : "none";
     this.vaultGalleryEl.style.display = this.galleryScope === "vault" ? "" : "none";
     this.galleryEl = this.galleryScope === "note" ? this.noteGalleryEl : this.vaultGalleryEl;
     this.renderGallery();
-    this.removeRow = this.contentEl.createEl("label", { cls: "hover-image-remove-row" });
-    this.removeInput = this.removeRow.createEl("input", { type: "checkbox" });
-    this.removeRow.appendText(" \u7ED1\u5B9A\u540E\u79FB\u9664\u7B14\u8BB0\u4E2D\u76F4\u63A5\u663E\u793A\u56FE\u7247\u7684\u90A3\u4E00\u884C\uFF08\u4E0D\u5220\u9664\u56FE\u7247\u6587\u4EF6\uFF09");
-    this.removeInput.checked = Boolean(this.recommended && !this.initialPath);
     const footer = this.contentEl.createDiv({ cls: "hover-image-footer" });
     this.selectedEl = footer.createDiv({ cls: "hover-image-selected" });
     const actions = footer.createDiv({ cls: "hover-image-actions" });
@@ -187,37 +211,53 @@ var BindModal = class extends import_obsidian.Modal {
     this.updateSelection();
   }
   renderGallery() {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+    var _a, _b, _c;
     if (!this.galleryEl) return;
+    const scope = this.galleryScope;
     this.galleryEl.empty();
-    const all = this.galleryScope === "note" ? this.noteImages : (_a = this.vaultImages) != null ? _a : this.vaultImages = this.app.vault.getFiles().filter((file) => IMAGE_EXTENSIONS.test(file.name)).sort((a, b) => b.stat.mtime - a.stat.mtime).map((file) => ({ file }));
-    this.renderedScopes[this.galleryScope] = true;
-    const query = this.galleryScope === "vault" ? (_c = (_b = this.searchEl) == null ? void 0 : _b.value.trim().toLowerCase()) != null ? _c : "" : "";
-    const matches = all.filter((image) => image.file.path.toLowerCase().includes(query));
+    this.galleryEl.scrollTop = 0;
+    const all = scope === "note" ? this.noteImages : (_a = this.vaultImages) != null ? _a : this.vaultImages = orderedImages(this.app.vault.getFiles()).map((file) => ({ file }));
+    this.renderedScopes[scope] = true;
+    const query = scope === "vault" ? (_c = (_b = this.searchEl) == null ? void 0 : _b.value) != null ? _c : "" : "";
+    const matches = matchingImages(all, query);
+    this.galleryMatches[scope] = matches;
+    this.visibleCounts[scope] = 0;
     this.galleryEl.toggleClass("is-empty", matches.length === 0);
     if (!matches.length) {
       const empty = this.galleryEl.createDiv({ cls: "hover-image-empty" });
-      if (this.galleryScope === "note") empty.createSpan({ cls: "hover-image-empty-icon", text: "!" });
-      empty.createSpan({ text: this.galleryScope === "note" ? "\u5F53\u524D\u7B14\u8BB0\u6CA1\u6709\u5339\u914D\u7684\u56FE\u7247\uFF0C\u53EF\u5207\u6362\u5230\u300C\u4ED3\u5E93\u5168\u90E8\u56FE\u7247\u300D\u3002" : "\u6CA1\u6709\u5339\u914D\u7684\u56FE\u7247\u3002" });
+      if (scope === "note") empty.createSpan({ cls: "hover-image-empty-icon", text: "!" });
+      empty.createSpan({ text: scope === "note" ? "\u5F53\u524D\u7B14\u8BB0\u6CA1\u6709\u5339\u914D\u7684\u56FE\u7247\uFF0C\u53EF\u5207\u6362\u5230\u300C\u4ED3\u5E93\u5168\u90E8\u56FE\u7247\u300D\u3002" : "\u6CA1\u6709\u5339\u914D\u7684\u56FE\u7247\u3002" });
       return;
     }
-    for (const image of matches.slice(0, 80)) {
-      const tile = this.galleryEl.createEl("button", { cls: "hover-image-tile", attr: { type: "button", title: image.file.path, "aria-label": `\u9009\u62E9 ${image.file.path}` } });
+    this.appendNextPage(scope);
+  }
+  appendNextPage(scope) {
+    var _a, _b, _c, _d, _e, _f;
+    const gallery = scope === "note" ? this.noteGalleryEl : this.vaultGalleryEl;
+    if (!gallery) return;
+    const offset = this.visibleCounts[scope];
+    const page = nextGalleryPage(this.galleryMatches[scope], offset);
+    for (const image of page) {
+      const tile = gallery.createEl("button", { cls: "hover-image-tile", attr: { type: "button", title: image.file.path, "aria-label": `\u9009\u62E9 ${image.file.path}` } });
       tile.dataset.imagePath = image.file.path;
-      tile.dataset.imageLine = String((_e = (_d = image.embed) == null ? void 0 : _d.line) != null ? _e : -1);
-      tile.toggleClass("is-selected", ((_f = this.selected) == null ? void 0 : _f.file.path) === image.file.path && ((_h = (_g = this.selected) == null ? void 0 : _g.embed) == null ? void 0 : _h.line) === ((_i = image.embed) == null ? void 0 : _i.line));
+      tile.dataset.imageLine = String((_b = (_a = image.embed) == null ? void 0 : _a.line) != null ? _b : -1);
+      tile.toggleClass("is-selected", ((_c = this.selected) == null ? void 0 : _c.file.path) === image.file.path && ((_e = (_d = this.selected) == null ? void 0 : _d.embed) == null ? void 0 : _e.line) === ((_f = image.embed) == null ? void 0 : _f.line));
       tile.createEl("img", { attr: { src: this.app.vault.getResourcePath(image.file), alt: "", loading: "lazy" } });
       tile.createEl("span", { text: image.file.name });
       if (image.recommended) tile.createEl("strong", { cls: "hover-image-badge", text: "\u4E0B\u65B9\u56FE\u7247" });
       tile.addEventListener("click", () => {
         this.selected = image;
         this.path = image.file.path;
-        if (this.removeInput) this.removeInput.checked = Boolean(image.recommended && !this.initialPath);
         this.updateSelection();
         this.syncSelectedTiles();
       });
     }
-    if (matches.length > 80) this.galleryEl.createEl("p", { cls: "hover-image-gallery-limit", text: `\u663E\u793A\u524D 80 / ${matches.length} \u5F20\uFF0C\u8BF7\u8F93\u5165\u5173\u952E\u8BCD\u7F29\u5C0F\u8303\u56F4\u3002` });
+    this.visibleCounts[scope] += page.length;
+  }
+  loadIfNearEnd(scope) {
+    const gallery = scope === "note" ? this.noteGalleryEl : this.vaultGalleryEl;
+    if (!gallery || this.visibleCounts[scope] >= this.galleryMatches[scope].length) return;
+    if (gallery.scrollTop + gallery.clientHeight >= gallery.scrollHeight - 200) this.appendNextPage(scope);
   }
   syncSelectedTiles() {
     var _a, _b, _c, _d, _e, _f;
@@ -226,26 +266,60 @@ var BindModal = class extends import_obsidian.Modal {
     }
   }
   updateSelection() {
-    var _a, _b;
     if (this.selectedEl) {
       this.selectedEl.setText(this.path ? `\u5DF2\u9009\u62E9\uFF1A${this.path}` : "");
       this.selectedEl.style.display = this.path ? "" : "none";
     }
-    if (this.removeRow) this.removeRow.style.display = ((_b = (_a = this.selected) == null ? void 0 : _a.embed) == null ? void 0 : _b.standalone) ? "flex" : "none";
   }
   async confirm(button) {
-    var _a, _b, _c;
+    var _a;
     button.disabled = true;
     try {
       const file = this.app.vault.getAbstractFileByPath(this.path);
       if (!(file instanceof import_obsidian.TFile) || !IMAGE_EXTENSIONS.test(file.name)) throw new Error("\u8BF7\u9009\u62E9\u4ED3\u5E93\u4E2D\u5DF2\u6709\u7684\u56FE\u7247\u3002");
-      await this.onConfirm(file.path, ((_a = this.removeInput) == null ? void 0 : _a.checked) && ((_c = (_b = this.selected) == null ? void 0 : _b.embed) == null ? void 0 : _c.standalone) ? this.selected.embed : null);
+      await this.onConfirm(file.path, standaloneImageToRemove((_a = this.selected) == null ? void 0 : _a.embed));
       this.close();
       new import_obsidian.Notice("\u60AC\u6D6E\u56FE\u7247\u5DF2\u8BBE\u7F6E");
     } catch (error) {
       new import_obsidian.Notice(error instanceof Error ? error.message : "\u8BBE\u7F6E\u5931\u8D25");
       button.disabled = false;
     }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var UnbindModal = class extends import_obsidian.Modal {
+  constructor(app, onChoose) {
+    super(app);
+    this.onChoose = onChoose;
+  }
+  onOpen() {
+    this.titleEl.setText("\u89E3\u9664\u60AC\u6D6E\u5173\u8054");
+    this.contentEl.createEl("p", { text: "\u9009\u62E9\u89E3\u9664\u540E\u7684\u663E\u793A\u65B9\u5F0F\u3002\u56FE\u7247\u9644\u4EF6\u6587\u4EF6\u4E0D\u4F1A\u88AB\u5220\u9664\u3002" });
+    const actions = this.contentEl.createDiv({ cls: "hover-image-unbind-actions" });
+    const only = actions.createEl("button", { text: "\u4EC5\u89E3\u9664\u5173\u8054" });
+    const show = actions.createEl("button", { text: "\u5728\u6B63\u6587\u663E\u793A\u56FE\u7247", cls: "mod-cta" });
+    actions.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
+    const choose = async (showImage) => {
+      only.disabled = true;
+      show.disabled = true;
+      try {
+        await this.onChoose(showImage);
+        this.close();
+        new import_obsidian.Notice(showImage ? "\u5DF2\u5728\u6B63\u6587\u663E\u793A\u56FE\u7247\u5E76\u89E3\u9664\u60AC\u6D6E\u5173\u8054" : "\u5DF2\u89E3\u9664\u60AC\u6D6E\u5173\u8054\uFF0C\u56FE\u7247\u6587\u4EF6\u4FDD\u7559");
+      } catch (error) {
+        new import_obsidian.Notice(error instanceof Error ? error.message : "\u89E3\u9664\u5173\u8054\u5931\u8D25");
+        only.disabled = false;
+        show.disabled = false;
+      }
+    };
+    only.addEventListener("click", () => {
+      void choose(false);
+    });
+    show.addEventListener("click", () => {
+      void choose(true);
+    });
   }
   onClose() {
     this.contentEl.empty();
@@ -363,8 +437,8 @@ var HoverImagePlugin = class extends import_obsidian.Plugin {
         new BindModal(this.app, (_a2 = target.dataset.hoverImage) != null ? _a2 : "", file, source, null, async (path) => this.updateBinding(file, id, (markup) => changeImage(markup, path))).open();
       }).catch((error) => new import_obsidian.Notice(error instanceof Error ? error.message : "\u65E0\u6CD5\u8BFB\u53D6\u5F53\u524D\u7B14\u8BB0"));
     }));
-    menu.addItem((item) => item.setTitle("\u79FB\u9664\u60AC\u6D6E\u56FE\u7247\u5173\u8054").setIcon("unlink").onClick(() => {
-      void this.updateBinding(file, id, removeImage).then(() => new import_obsidian.Notice("\u5DF2\u79FB\u9664\u5173\u8054\uFF0C\u56FE\u7247\u6587\u4EF6\u4FDD\u7559")).catch((error) => new import_obsidian.Notice(error instanceof Error ? error.message : "\u79FB\u9664\u5931\u8D25"));
+    menu.addItem((item) => item.setTitle("\u89E3\u9664\u60AC\u6D6E\u5173\u8054\u2026").setIcon("unlink").onClick(() => {
+      new UnbindModal(this.app, (showImage) => showImage ? this.showImageInNote(file, id) : this.updateBinding(file, id, removeImage)).open();
     }));
     menu.showAtMouseEvent(event);
   }
@@ -377,5 +451,22 @@ var HoverImagePlugin = class extends import_obsidian.Plugin {
       return source.slice(0, binding.start) + change(binding.markup) + source.slice(binding.end);
     });
     if (!found) throw new Error("\u672A\u5728\u5F53\u524D\u7B14\u8BB0\u627E\u5230\u5173\u8054\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u7B14\u8BB0\u3002");
+  }
+  async showImageInNote(file, id) {
+    await this.app.vault.process(file, (source) => {
+      var _a;
+      const binding = findBinding(source, id);
+      if (!binding) throw new Error("\u672A\u5728\u5F53\u524D\u7B14\u8BB0\u627E\u5230\u5173\u8054\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u7B14\u8BB0\u3002");
+      const path = imagePathFromMarkup(binding.markup);
+      const image = path ? this.app.vault.getAbstractFileByPath(path) : null;
+      if (!(image instanceof import_obsidian.TFile) || !IMAGE_EXTENSIONS.test(image.name)) throw new Error("\u5173\u8054\u7684\u56FE\u7247\u6587\u4EF6\u4E0D\u5B58\u5728\uFF0C\u65E0\u6CD5\u663E\u793A\u5230\u6B63\u6587\u3002");
+      const anchorLine = source.slice(0, binding.end).split("\n").length - 1;
+      const below = adjacentImage(source, anchorLine, scanNoteImages(source));
+      if (below && ((_a = this.app.metadataCache.getFirstLinkpathDest(below.linkpath, file.path)) == null ? void 0 : _a.path) === image.path) {
+        return source.slice(0, binding.start) + removeImage(binding.markup) + source.slice(binding.end);
+      }
+      const embed = `!${this.app.fileManager.generateMarkdownLink(image, file.path)}`;
+      return restoreImageBelow(source, id, embed);
+    });
   }
 };

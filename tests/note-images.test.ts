@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adjacentImage, scanNoteImages } from '../src/note-images';
+import { adjacentImage, scanNoteImages, standaloneImageToRemove } from '../src/note-images';
 
 test('finds an embedded image immediately below a link across blank lines', () => {
   const source = 'https://growingupvideo.com/\n\n![[Pasted image 20261027194426.png]]\n';
@@ -21,4 +21,11 @@ test('never guesses past another content line or an inline image', () => {
   const images = scanNoteImages(source);
   assert.equal(adjacentImage(source, 0, images), null);
   assert.equal(adjacentImage(source, 3, images), null);
+});
+
+test('automatically removes only a selected standalone image embed after binding', () => {
+  const images = scanNoteImages('![[standalone.png]]\nText ![[inline.png]]');
+  assert.equal(standaloneImageToRemove(images[0]), images[0]);
+  assert.equal(standaloneImageToRemove(images[1]), null);
+  assert.equal(standaloneImageToRemove(undefined), null);
 });

@@ -5,6 +5,10 @@ export interface NoteImage {
   standalone: boolean;
 }
 
+export function standaloneImageToRemove(image: NoteImage | undefined): NoteImage | null {
+  return image?.standalone ? image : null;
+}
+
 export function scanNoteImages(source: string): NoteImage[] {
   const images: NoteImage[] = [];
   let inFence = false;
