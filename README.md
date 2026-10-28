@@ -36,7 +36,7 @@ Bind an image already in your Obsidian vault to selected text or a website link.
 - Store bindings in the Markdown note itself, without a separate database.
 
 ## Install
-Download `manifest.json`, `main.js`, and `styles.css` from the [latest GitHub release](https://github.com/keyoneway/hover-image/releases/latest). Put all three files in `<your-vault>/.obsidian/plugins/hover-image/`, then enable **Hover Image** under **Settings → Community plugins**. This plugin is not yet listed in Obsidian's community plugin browser.
+In Obsidian, open **Settings → Community plugins → Browse**, search for **Hover Image**, install it, and enable it. If the listing has not yet appeared in the app, download `manifest.json`, `main.js`, and `styles.css` from the [latest GitHub release](https://github.com/keyoneway/hover-image/releases/latest), put them in `<your-vault>/.obsidian/plugins/hover-image/`, and enable the plugin under **Settings → Community plugins**.
 
 ## Use
 1. In Edit view, select a complete URL, Markdown link, or plain text.
@@ -74,7 +74,7 @@ npm run build
 
 ### 安装
 
-从 [GitHub 最新版本](https://github.com/keyoneway/hover-image/releases/latest)下载 `manifest.json`、`main.js`、`styles.css`，放入仓库的 `.obsidian/plugins/hover-image/` 文件夹，然后在 Obsidian「设置 → 第三方插件」中启用 **Hover Image**。目前尚未上架 Obsidian 社区插件市场，不能通过市场搜索安装。
+在 Obsidian「设置 → 第三方插件 → 浏览」中搜索 **Hover Image**，安装并启用。如果插件暂未出现在应用内搜索结果中，可以先从 [GitHub 最新版本](https://github.com/keyoneway/hover-image/releases/latest)下载 `manifest.json`、`main.js`、`styles.css`，放入仓库的 `.obsidian/plugins/hover-image/` 文件夹，再在「第三方插件」中启用。
 
 ### 数据与限制
 
