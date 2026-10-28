@@ -173,7 +173,7 @@ export default class HoverImagePlugin extends Plugin {
 
   onload(): void {
     this.addCommand({
-      id: 'bind-hover-image', name: '为选中文本设置悬浮图片',
+      id: 'bind-selection', name: '为选中文本设置悬浮图片',
       editorCheckCallback: (checking, editor) => {
         if (!editor.getSelection().trim()) return false;
         if (!checking) this.bindSelection(editor);
@@ -230,9 +230,8 @@ export default class HoverImagePlugin extends Plugin {
     if (!path) return;
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) return;
-    const popup = document.createElement('div');
-    popup.className = 'hover-image-popup';
-    const image = document.createElement('img');
+    const popup = document.body.createDiv({ cls: 'hover-image-popup' });
+    const image = popup.createEl('img');
     image.alt = '';
     const place = () => {
       if (!popup.isConnected) return;
@@ -243,10 +242,8 @@ export default class HoverImagePlugin extends Plugin {
     };
     image.addEventListener('load', place);
     image.src = this.app.vault.getResourcePath(file);
-    popup.appendChild(image);
-    document.body.appendChild(popup);
     place();
-    requestAnimationFrame(place);
+    window.requestAnimationFrame(place);
     this.popup = popup;
   }
 

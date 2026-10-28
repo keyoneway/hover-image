@@ -259,7 +259,7 @@ var HoverImagePlugin = class extends import_obsidian.Plugin {
   }
   onload() {
     this.addCommand({
-      id: "bind-hover-image",
+      id: "bind-selection",
       name: "\u4E3A\u9009\u4E2D\u6587\u672C\u8BBE\u7F6E\u60AC\u6D6E\u56FE\u7247",
       editorCheckCallback: (checking, editor) => {
         if (!editor.getSelection().trim()) return false;
@@ -323,9 +323,8 @@ var HoverImagePlugin = class extends import_obsidian.Plugin {
     if (!path) return;
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof import_obsidian.TFile)) return;
-    const popup = document.createElement("div");
-    popup.className = "hover-image-popup";
-    const image = document.createElement("img");
+    const popup = document.body.createDiv({ cls: "hover-image-popup" });
+    const image = popup.createEl("img");
     image.alt = "";
     const place = () => {
       if (!popup.isConnected) return;
@@ -336,10 +335,8 @@ var HoverImagePlugin = class extends import_obsidian.Plugin {
     };
     image.addEventListener("load", place);
     image.src = this.app.vault.getResourcePath(file);
-    popup.appendChild(image);
-    document.body.appendChild(popup);
     place();
-    requestAnimationFrame(place);
+    window.requestAnimationFrame(place);
     this.popup = popup;
   }
   hidePopup() {
