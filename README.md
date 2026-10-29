@@ -31,7 +31,7 @@ Bind an image already in your Obsidian vault to selected text or a website link.
 ## Features
 - Pick an image from thumbnail galleries for the current note or the whole vault. Browse all vault images as you scroll, or search the complete collection by filename or folder.
 - When an image embed immediately follows selected text, preselect it. Binding a standalone image from the current note automatically removes its embed from the note while keeping the image file.
-- Preview images on hover in Reading view or non-editing lines of Live Preview, with a larger preview.
+- Preview images on hover in Reading view or non-editing lines of Live Preview. Click the preview's top-left expand button to open a larger viewer, then choose original size to inspect details.
 - Right-click bound text to replace its image, remove the association, or remove the association and show the image below the text.
 - Store bindings in the Markdown note itself, without a separate database.
 
@@ -42,7 +42,7 @@ In Obsidian, open **Settings → Community plugins → Browse**, search for **Ho
 1. In Edit view, select a complete URL, Markdown link, or plain text.
 2. Right-click and choose **设置悬浮图片**, or run **为选中文本设置悬浮图片** from the Command Palette.
 3. Choose an existing image thumbnail under **当前笔记** (Current note) or **仓库全部图片** (All vault images), then confirm.
-4. Hover over the bound text to preview. Right-click it in Reading view to replace the image or open **解除悬浮关联…** to choose whether to show the image in the note.
+4. Hover over the bound text to preview. Click the top-left expand button for a larger image, and switch to original size if needed. Right-click the text in Reading view to replace the image or open **解除悬浮关联…** to choose whether to show the image in the note.
 
 ## Limitations
 - The note stores the binding as HTML attributes. Source mode and the line currently being edited in Live Preview can show this markup.
@@ -70,7 +70,7 @@ npm run build
 2. 右键点击「设置悬浮图片」，也可以在命令面板搜索「为选中文本设置悬浮图片」。
 3. 在「当前笔记」或「仓库全部图片」中点击图片缩略图，再点「确定」。仓库图片可以按文件名或文件夹搜索。
 4. 如果文字下方紧跟着正文图片，弹窗会优先选中这张图。绑定当前笔记中单独占一行的图片后，正文中的图片嵌入会自动移除，附件文件仍保留。
-5. 在阅读视图或实时预览的非编辑行悬浮文字查看较大的图片预览。右键已绑定的文字，可更换图片；选择「解除悬浮关联…」后，可仅解除关联，或将图片显示在文字下方。仓库图库支持下滑加载全部图片，搜索也覆盖全部图片。
+5. 在阅读视图或实时预览的非编辑行悬浮文字查看图片预览。点击预览图左上角的放大按钮，可在大图窗口查看；需要看清细节时，点击「查看原始尺寸」，还可切回「适应窗口」。右键已绑定的文字，可更换图片；选择「解除悬浮关联…」后，可仅解除关联，或将图片显示在文字下方。仓库图库支持下滑加载全部图片，搜索也覆盖全部图片。
 
 ### 安装
 

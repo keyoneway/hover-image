@@ -133,6 +133,11 @@ function nextGalleryPage(images, offset, pageSize = 80) {
   return images.slice(offset, offset + pageSize);
 }
 
+// src/hover-region.ts
+function pointerIsInHoverRegion(node, target, popup) {
+  return Boolean(node && (target.contains(node) || (popup == null ? void 0 : popup.contains(node))));
+}
+
 // src/main.ts
 var BindModal = class extends import_obsidian.Modal {
   constructor(app, initialPath, noteFile, noteSource, selectedLine, onConfirm) {
@@ -325,11 +330,35 @@ var UnbindModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
+var ImageZoomModal = class extends import_obsidian.Modal {
+  constructor(app, file) {
+    super(app);
+    this.file = file;
+  }
+  onOpen() {
+    this.modalEl.addClass("hover-image-zoom-modal");
+    this.titleEl.setText("\u67E5\u770B\u56FE\u7247");
+    const toggle = this.contentEl.createEl("button", { cls: "hover-image-zoom-toggle", text: "\u67E5\u770B\u539F\u59CB\u5C3A\u5BF8" });
+    const viewer = this.contentEl.createDiv({ cls: "hover-image-zoom-viewer" });
+    viewer.createEl("img", { attr: { src: this.app.vault.getResourcePath(this.file), alt: this.file.name } });
+    toggle.addEventListener("click", () => {
+      const original = viewer.classList.toggle("is-original-size");
+      toggle.setText(original ? "\u9002\u5E94\u7A97\u53E3" : "\u67E5\u770B\u539F\u59CB\u5C3A\u5BF8");
+      viewer.scrollTop = 0;
+      viewer.scrollLeft = 0;
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 var HoverImagePlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     __publicField(this, "popup", null);
     __publicField(this, "hoverTimer", null);
+    __publicField(this, "hideTimer", null);
+    __publicField(this, "activeTarget", null);
   }
   onload() {
     this.addCommand({
@@ -348,13 +377,18 @@ var HoverImagePlugin = class extends import_obsidian.Plugin {
       var _a, _b;
       const target = (_b = (_a = event.target) == null ? void 0 : _a.closest) == null ? void 0 : _b.call(_a, ".hover-image-target");
       if (!target) return;
+      this.cancelHidePopup();
+      if (this.popup && this.activeTarget === target) return;
       this.hidePopup();
       this.hoverTimer = window.setTimeout(() => this.showPopup(target), 180);
     });
     this.registerDomEvent(document, "mouseout", (event) => {
       var _a, _b;
       const target = (_b = (_a = event.target) == null ? void 0 : _a.closest) == null ? void 0 : _b.call(_a, ".hover-image-target");
-      if (target && !(event.relatedTarget instanceof Node && target.contains(event.relatedTarget))) this.hidePopup();
+      if (!target || pointerIsInHoverRegion(event.relatedTarget instanceof Node ? event.relatedTarget : null, target, this.popup)) return;
+      if (this.hoverTimer !== null) window.clearTimeout(this.hoverTimer);
+      this.hoverTimer = null;
+      if (this.popup) this.scheduleHidePopup();
     });
     this.registerDomEvent(document, "scroll", () => this.hidePopup(), true);
     this.registerDomEvent(document, "contextmenu", (event) => this.openBindingMenu(event), true);
@@ -400,6 +434,18 @@ var HoverImagePlugin = class extends import_obsidian.Plugin {
     const popup = document.body.createDiv({ cls: "hover-image-popup" });
     const image = popup.createEl("img");
     image.alt = "";
+    const zoom = popup.createEl("button", { cls: "hover-image-zoom-button", attr: { type: "button", "aria-label": "\u653E\u5927\u56FE\u7247", title: "\u653E\u5927\u56FE\u7247" } });
+    (0, import_obsidian.setIcon)(zoom, "maximize");
+    zoom.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.hidePopup();
+      new ImageZoomModal(this.app, file).open();
+    });
+    popup.addEventListener("mouseenter", () => this.cancelHidePopup());
+    popup.addEventListener("mouseleave", (event) => {
+      if (!pointerIsInHoverRegion(event.relatedTarget instanceof Node ? event.relatedTarget : null, target, popup)) this.scheduleHidePopup();
+    });
     const place = () => {
       if (!popup.isConnected) return;
       const rect = target.getBoundingClientRect();
@@ -412,13 +458,24 @@ var HoverImagePlugin = class extends import_obsidian.Plugin {
     place();
     window.requestAnimationFrame(place);
     this.popup = popup;
+    this.activeTarget = target;
+  }
+  cancelHidePopup() {
+    if (this.hideTimer !== null) window.clearTimeout(this.hideTimer);
+    this.hideTimer = null;
+  }
+  scheduleHidePopup() {
+    this.cancelHidePopup();
+    this.hideTimer = window.setTimeout(() => this.hidePopup(), 200);
   }
   hidePopup() {
     var _a;
     if (this.hoverTimer !== null) window.clearTimeout(this.hoverTimer);
     this.hoverTimer = null;
+    this.cancelHidePopup();
     (_a = this.popup) == null ? void 0 : _a.remove();
     this.popup = null;
+    this.activeTarget = null;
   }
   openBindingMenu(event) {
     var _a, _b;

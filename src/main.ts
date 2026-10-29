@@ -1,8 +1,9 @@
-import { App, Editor, Menu, Modal, Notice, Plugin, TFile } from 'obsidian';
+import { App, Editor, Menu, Modal, Notice, Plugin, TFile, setIcon } from 'obsidian';
 import { bindImage, changeImage, findBinding, imagePathFromMarkup, removeImage, restoreImageBelow } from './markup';
 import { adjacentImage, NoteImage, scanNoteImages, standaloneImageToRemove } from './note-images';
 import { popupPosition } from './popup-position';
 import { IMAGE_EXTENSIONS, matchingImages, nextGalleryPage, orderedImages } from './gallery';
+import { pointerIsInHoverRegion } from './hover-region';
 
 interface GalleryImage { file: TFile; embed?: NoteImage; recommended?: boolean }
 
@@ -199,9 +200,31 @@ class UnbindModal extends Modal {
   onClose(): void { this.contentEl.empty(); }
 }
 
+class ImageZoomModal extends Modal {
+  constructor(app: App, private readonly file: TFile) { super(app); }
+
+  onOpen(): void {
+    this.modalEl.addClass('hover-image-zoom-modal');
+    this.titleEl.setText('查看图片');
+    const toggle = this.contentEl.createEl('button', { cls: 'hover-image-zoom-toggle', text: '查看原始尺寸' });
+    const viewer = this.contentEl.createDiv({ cls: 'hover-image-zoom-viewer' });
+    viewer.createEl('img', { attr: { src: this.app.vault.getResourcePath(this.file), alt: this.file.name } });
+    toggle.addEventListener('click', () => {
+      const original = viewer.classList.toggle('is-original-size');
+      toggle.setText(original ? '适应窗口' : '查看原始尺寸');
+      viewer.scrollTop = 0;
+      viewer.scrollLeft = 0;
+    });
+  }
+
+  onClose(): void { this.contentEl.empty(); }
+}
+
 export default class HoverImagePlugin extends Plugin {
   private popup: HTMLDivElement | null = null;
   private hoverTimer: number | null = null;
+  private hideTimer: number | null = null;
+  private activeTarget: HTMLElement | null = null;
 
   onload(): void {
     this.addCommand({
@@ -218,12 +241,17 @@ export default class HoverImagePlugin extends Plugin {
     this.registerDomEvent(document, 'mouseover', event => {
       const target = (event.target as Element | null)?.closest?.('.hover-image-target') as HTMLElement | null;
       if (!target) return;
+      this.cancelHidePopup();
+      if (this.popup && this.activeTarget === target) return;
       this.hidePopup();
       this.hoverTimer = window.setTimeout(() => this.showPopup(target), 180);
     });
     this.registerDomEvent(document, 'mouseout', event => {
-      const target = (event.target as Element | null)?.closest?.('.hover-image-target');
-      if (target && !(event.relatedTarget instanceof Node && target.contains(event.relatedTarget))) this.hidePopup();
+      const target = (event.target as Element | null)?.closest?.('.hover-image-target') as HTMLElement | null;
+      if (!target || pointerIsInHoverRegion(event.relatedTarget instanceof Node ? event.relatedTarget : null, target, this.popup)) return;
+      if (this.hoverTimer !== null) window.clearTimeout(this.hoverTimer);
+      this.hoverTimer = null;
+      if (this.popup) this.scheduleHidePopup();
     });
     this.registerDomEvent(document, 'scroll', () => this.hidePopup(), true);
     this.registerDomEvent(document, 'contextmenu', event => this.openBindingMenu(event), true);
@@ -265,6 +293,18 @@ export default class HoverImagePlugin extends Plugin {
     const popup = document.body.createDiv({ cls: 'hover-image-popup' });
     const image = popup.createEl('img');
     image.alt = '';
+    const zoom = popup.createEl('button', { cls: 'hover-image-zoom-button', attr: { type: 'button', 'aria-label': '放大图片', title: '放大图片' } });
+    setIcon(zoom, 'maximize');
+    zoom.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.hidePopup();
+      new ImageZoomModal(this.app, file).open();
+    });
+    popup.addEventListener('mouseenter', () => this.cancelHidePopup());
+    popup.addEventListener('mouseleave', event => {
+      if (!pointerIsInHoverRegion(event.relatedTarget instanceof Node ? event.relatedTarget : null, target, popup)) this.scheduleHidePopup();
+    });
     const place = () => {
       if (!popup.isConnected) return;
       const rect = target.getBoundingClientRect();
@@ -277,13 +317,26 @@ export default class HoverImagePlugin extends Plugin {
     place();
     window.requestAnimationFrame(place);
     this.popup = popup;
+    this.activeTarget = target;
+  }
+
+  private cancelHidePopup(): void {
+    if (this.hideTimer !== null) window.clearTimeout(this.hideTimer);
+    this.hideTimer = null;
+  }
+
+  private scheduleHidePopup(): void {
+    this.cancelHidePopup();
+    this.hideTimer = window.setTimeout(() => this.hidePopup(), 200);
   }
 
   private hidePopup(): void {
     if (this.hoverTimer !== null) window.clearTimeout(this.hoverTimer);
     this.hoverTimer = null;
+    this.cancelHidePopup();
     this.popup?.remove();
     this.popup = null;
+    this.activeTarget = null;
   }
 
   private openBindingMenu(event: MouseEvent): void {
